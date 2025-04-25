@@ -1,0 +1,2043 @@
+# AI-Powered Automated Dependency Upgrades Project
+
+## Executive Summary
+
+This project creates an AI-powered system that automates the entire dependency upgrade lifecycle using LangChain agents, vector databases for code context, and LLM integration. The system will:
+
+1. Scan repositories to identify upgrade candidates
+2. Analyze potential impacts using AI
+3. Implement necessary code changes
+4. Generate and run tests
+5. Create pull requests with minimal developer intervention
+
+## Project Setup Tasks
+
+1. Set up environment and configuration
+2. Create vector database for code embedding
+3. Implement LangChain agents and tools
+4. Build dependency scanning functionality
+5. Develop code analysis and modification capabilities
+6. Create test generation and validation
+7. Implement Git operations (branch, commit, PR)
+8. Add error handling and retry mechanisms
+
+Let's start with the implementation steps and code snippets:
+
+## 1. Project Structure
+
+```
+automated-upgrades/
+├── config/
+│   ├── __init__.py
+│   ├── settings.py
+│   └── logging_config.py
+├── agents/
+│   ├── __init__.py
+│   ├── upgrade_agent.py
+│   └── test_agent.py
+├── tools/
+│   ├── __init__.py
+│   ├── code_analysis.py
+│   ├── dependency_scanner.py
+│   ├── git_operations.py
+│   ├── test_generator.py
+│   ├── vector_db.py
+│   └── compilation.py
+├── utils/
+│   ├── __init__.py
+│   ├── message_formatter.py
+│   └── helpers.py
+├── .env
+├── requirements.txt
+└── main.py
+```
+
+## 2. Environment Setup
+
+Create a `.env` file with the necessary configuration:
+
+```
+# LLM API Configuration
+LLM_PROVIDER=anthropic  # or openai
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+
+# Vector DB Configuration
+VECTOR_DB_TYPE=chroma  # or pinecone, qdrant, etc.
+VECTOR_DB_PATH=./vector_db
+
+# GitHub Configuration
+GITHUB_TOKEN=your_github_token
+GITHUB_USERNAME=your_github_username
+GITHUB_EMAIL=your_github_email
+
+# Project Configuration
+PROJECT_PATH=./target_repo
+```
+
+Create `requirements.txt`:
+
+```
+langchain==0.1.0
+langchain_community==0.0.12
+langchain_anthropic==0.1.1
+langchain_openai==0.0.2
+anthropic==0.8.1
+openai==1.3.5
+chromadb==0.4.18
+gitpython==3.1.40
+python-dotenv==1.0.0
+pydantic==2.5.2
+```
+
+## 3. Configuration Setup
+
+Let's create the configuration files:
+
+### `config/settings.py`
+
+```python
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load environment variables
+load_dotenv()
+
+# LLM Configuration
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4-turbo")
+
+# Vector DB Configuration
+VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")
+VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./vector_db")
+
+# GitHub Configuration
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME")
+GITHUB_EMAIL = os.getenv("GITHUB_EMAIL")
+
+# Project Configuration
+PROJECT_PATH = Path(os.getenv("PROJECT_PATH", "./target_repo")).absolute()
+
+# Ensure all required paths exist
+Path(VECTOR_DB_PATH).mkdir(parents=True, exist_ok=True)
+```
+
+### `config/logging_config.py`
+
+```python
+import logging
+import sys
+from pathlib import Path
+
+def setup_logging():
+    # Create logs directory if it doesn't exist
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_dir / "upgrade_agent.log"),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    # Return logger
+    return logging.getLogger("upgrade_agent")
+
+logger = setup_logging()
+```
+
+## 4. Vector Database Setup and Code Embedding
+
+### `tools/vector_db.py`
+
+```python
+import os
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
+import shutil
+
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+
+from config.settings import VECTOR_DB_PATH, OPENAI_API_KEY, PROJECT_PATH
+
+logger = logging.getLogger(__name__)
+
+class CodeVectorDB:
+    def __init__(self):
+        self.vector_db_path = VECTOR_DB_PATH
+        self.embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+        self.vector_store = None
+        
+    def _get_code_files(self, project_path: Path) -> List[Path]:
+        """Get all code files from project directory."""
+        code_extensions = [
+            '.py', '.java', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', 
+            '.c', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb', '.php',
+            '.scala', '.kt', '.groovy', '.sh', '.bash', '.yml', '.yaml',
+            '.json', '.xml', '.md', '.txt', '.gradle', '.pom', '.properties'
+        ]
+        
+        code_files = []
+        for ext in code_extensions:
+            code_files.extend(list(project_path.glob(f"**/*{ext}")))
+        
+        # Filter out files in directories that should be ignored
+        ignored_dirs = ['node_modules', 'venv', '.git', '.idea', '.vscode', 'target', 'build', 'dist']
+        filtered_files = [
+            f for f in code_files 
+            if not any(ignored_dir in str(f) for ignored_dir in ignored_dirs)
+        ]
+        
+        return filtered_files
+    
+    def _load_documents(self, file_paths: List[Path]) -> List[Document]:
+        """Load documents from file paths."""
+        documents = []
+        
+        for file_path in file_paths:
+            try:
+                # Only process text files
+                if file_path.is_file():
+                    try:
+                        loader = TextLoader(str(file_path))
+                        file_docs = loader.load()
+                        
+                        # Add file path as metadata
+                        for doc in file_docs:
+                            doc.metadata["source"] = str(file_path.relative_to(PROJECT_PATH))
+                            doc.metadata["file_type"] = file_path.suffix
+                        
+                        documents.extend(file_docs)
+                    except Exception as e:
+                        logger.warning(f"Could not load {file_path}: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {str(e)}")
+        
+        return documents
+    
+    def embed_project(self, project_path: Path = PROJECT_PATH, force_refresh: bool = False):
+        """Embed project code files into vector database."""
+        if os.path.exists(self.vector_db_path) and not force_refresh:
+            logger.info(f"Vector database already exists at {self.vector_db_path}. Loading...")
+            self.vector_store = Chroma(persist_directory=self.vector_db_path, embedding_function=self.embeddings)
+            return
+            
+        if os.path.exists(self.vector_db_path) and force_refresh:
+            logger.info(f"Removing existing vector database at {self.vector_db_path}")
+            shutil.rmtree(self.vector_db_path)
+        
+        logger.info(f"Embedding project code from {project_path}")
+        
+        # Get all code files
+        code_files = self._get_code_files(project_path)
+        logger.info(f"Found {len(code_files)} code files")
+        
+        # Load documents
+        documents = self._load_documents(code_files)
+        logger.info(f"Loaded {len(documents)} documents")
+        
+        # Split documents
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        splits = text_splitter.split_documents(documents)
+        logger.info(f"Split into {len(splits)} chunks")
+        
+        # Create and persist vector store
+        self.vector_store = Chroma.from_documents(
+            documents=splits,
+            embedding=self.embeddings,
+            persist_directory=self.vector_db_path
+        )
+        self.vector_store.persist()
+        logger.info(f"Vector database created and persisted at {self.vector_db_path}")
+    
+    def query_codebase(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """Query the vector database for relevant code."""
+        if not self.vector_store:
+            self.embed_project()
+        
+        results = self.vector_store.similarity_search_with_score(query, k=n_results)
+        
+        formatted_results = []
+        for doc, score in results:
+            formatted_results.append({
+                "content": doc.page_content,
+                "source": doc.metadata.get("source", "Unknown"),
+                "file_type": doc.metadata.get("file_type", "Unknown"),
+                "relevance_score": score
+            })
+        
+        return formatted_results
+    
+    def get_file_content(self, file_path: str) -> str:
+        """Get the content of a specific file."""
+        full_path = PROJECT_PATH / file_path
+        if not full_path.exists():
+            return f"File not found: {file_path}"
+        
+        try:
+            return full_path.read_text(encoding='utf-8')
+        except Exception as e:
+            return f"Error reading file {file_path}: {str(e)}"
+```
+
+## 5. Message Formatting Utility
+
+### `utils/message_formatter.py`
+
+```python
+from typing import Dict, Any, List
+from enum import Enum
+import re
+
+class Role(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    FUNCTION = "function"
+
+class MessageFormatter:
+    @staticmethod
+    def format_message(role: Role, content: str) -> str:
+        """Format a message with a colored box based on the role."""
+        if role == Role.SYSTEM:
+            color = "blue"
+            emoji = "🤖"
+        elif role == Role.USER:
+            color = "green"
+            emoji = "👤"
+        elif role == Role.ASSISTANT:
+            color = "purple"
+            emoji = "🧠"
+        elif role == Role.FUNCTION:
+            color = "orange"
+            emoji = "⚙️"
+        else:
+            color = "gray"
+            emoji = "📝"
+            
+        header = f"{emoji} {role.upper()}"
+        
+        # Format the box with color
+        box = f"""
+┌───────────────────────────── {header} ─────────────────────────────┐
+│                                                                    │
+{MessageFormatter._wrap_content(content)}
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+"""
+        return box
+    
+    @staticmethod
+    def _wrap_content(content: str, max_width: int = 68) -> str:
+        """Wrap content to fit within the box."""
+        lines = content.split('\n')
+        wrapped_lines = []
+        
+        for line in lines:
+            if len(line) <= max_width:
+                wrapped_lines.append(f"│ {line.ljust(max_width)} │")
+            else:
+                # Split long lines
+                current_line = ""
+                for word in line.split():
+                    if len(current_line) + len(word) + 1 <= max_width:
+                        current_line += " " + word if current_line else word
+                    else:
+                        wrapped_lines.append(f"│ {current_line.ljust(max_width)} │")
+                        current_line = word
+                if current_line:
+                    wrapped_lines.append(f"│ {current_line.ljust(max_width)} │")
+        
+        return "\n".join(wrapped_lines)
+    
+    @staticmethod
+    def format_code_block(code: str, language: str = "") -> str:
+        """Format code in a markdown code block."""
+        return f"```{language}\n{code}\n```"
+    
+    @staticmethod
+    def extract_code_blocks(text: str) -> List[Dict[str, str]]:
+        """Extract code blocks from text."""
+        pattern = r"```(\w*)\n([\s\S]*?)\n```"
+        matches = re.findall(pattern, text)
+        
+        code_blocks = []
+        for language, code in matches:
+            code_blocks.append({
+                "language": language,
+                "code": code
+            })
+        
+        return code_blocks
+```
+
+## 6. Dependency Scanner Tool
+
+### `tools/dependency_scanner.py`
+
+```python
+import os
+import re
+import json
+import logging
+import subprocess
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Tuple
+
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from config.settings import PROJECT_PATH
+
+logger = logging.getLogger(__name__)
+
+class DependencyScannerInput(BaseModel):
+    project_path: str = Field(default=str(PROJECT_PATH), description="Path to the project directory")
+
+class DependencyScanner(BaseTool):
+    name = "dependency_scanner"
+    description = "Scans a project for dependencies and identifies upgrade candidates"
+    args_schema = DependencyScannerInput
+    
+    def _run(self, project_path: str = str(PROJECT_PATH)) -> Dict[str, Any]:
+        """Run the dependency scanner."""
+        project_path = Path(project_path)
+        if not project_path.exists():
+            return {"error": f"Project path {project_path} does not exist"}
+        
+        logger.info(f"Scanning dependencies in {project_path}")
+        
+        # Detect project type and dependencies
+        project_type, dependency_files = self._detect_project_type(project_path)
+        
+        if not project_type:
+            return {"error": "Could not determine project type"}
+        
+        # Parse dependencies based on project type
+        dependencies = self._parse_dependencies(project_type, dependency_files)
+        
+        # Check for upgrade candidates
+        upgrade_candidates = self._find_upgrade_candidates(project_type, dependencies)
+        
+        return {
+            "project_type": project_type,
+            "dependency_files": [str(f.relative_to(project_path)) for f in dependency_files],
+            "dependencies": dependencies,
+            "upgrade_candidates": upgrade_candidates
+        }
+    
+    def _detect_project_type(self, project_path: Path) -> Tuple[Optional[str], List[Path]]:
+        """Detect the type of project and find dependency files."""
+        dependency_files = []
+        
+        # Check for Python project
+        requirements_txt = list(project_path.glob("**/requirements.txt"))
+        setup_py = list(project_path.glob("**/setup.py"))
+        pyproject_toml = list(project_path.glob("**/pyproject.toml"))
+        
+        if requirements_txt or setup_py or pyproject_toml:
+            dependency_files.extend(requirements_txt)
+            dependency_files.extend(setup_py)
+            dependency_files.extend(pyproject_toml)
+            return "python", dependency_files
+        
+        # Check for Node.js project
+        package_json = list(project_path.glob("**/package.json"))
+        if package_json:
+            dependency_files.extend(package_json)
+            return "nodejs", dependency_files
+        
+        # Check for Java/Maven project
+        pom_xml = list(project_path.glob("**/pom.xml"))
+        if pom_xml:
+            dependency_files.extend(pom_xml)
+            return "maven", dependency_files
+        
+        # Check for Gradle project
+        build_gradle = list(project_path.glob("**/build.gradle")) + list(project_path.glob("**/build.gradle.kts"))
+        if build_gradle:
+            dependency_files.extend(build_gradle)
+            return "gradle", dependency_files
+        
+        # Check for .NET project
+        csproj_files = list(project_path.glob("**/*.csproj"))
+        if csproj_files:
+            dependency_files.extend(csproj_files)
+            return "dotnet", dependency_files
+        
+        return None, []
+    
+    def _parse_dependencies(self, project_type: str, dependency_files: List[Path]) -> List[Dict[str, str]]:
+        """Parse dependencies based on project type."""
+        dependencies = []
+        
+        for file_path in dependency_files:
+            if project_type == "python":
+                if file_path.name == "requirements.txt":
+                    dependencies.extend(self._parse_requirements_txt(file_path))
+                # Add other Python dependency file parsers as needed
+            
+            elif project_type == "nodejs":
+                if file_path.name == "package.json":
+                    dependencies.extend(self._parse_package_json(file_path))
+            
+            elif project_type == "maven":
+                if file_path.name == "pom.xml":
+                    dependencies.extend(self._parse_pom_xml(file_path))
+            
+            # Add other project type parsers as needed
+        
+        return dependencies
+    
+    def _parse_requirements_txt(self, file_path: Path) -> List[Dict[str, str]]:
+        """Parse Python requirements.txt file."""
+        dependencies = []
+        try:
+            content = file_path.read_text()
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Handle different formats
+                if '==' in line:
+                    name, version = line.split('==', 1)
+                    dependencies.append({
+                        "name": name.strip(),
+                        "version": version.strip(),
+                        "constraint": "==",
+                        "file": str(file_path)
+                    })
+                elif '>=' in line:
+                    name, version = line.split('>=', 1)
+                    dependencies.append({
+                        "name": name.strip(),
+                        "version": version.strip(),
+                        "constraint": ">=",
+                        "file": str(file_path)
+                    })
+                # Add other formats as needed
+        except Exception as e:
+            logger.error(f"Error parsing {file_path}: {str(e)}")
+        
+        return dependencies
+    
+    def _parse_package_json(self, file_path: Path) -> List[Dict[str, str]]:
+        """Parse Node.js package.json file."""
+        dependencies = []
+        try:
+            content = json.loads(file_path.read_text())
+            
+            # Parse dependencies
+            for dep_type in ["dependencies", "devDependencies"]:
+                if dep_type in content:
+                    for name, version in content[dep_type].items():
+                        # Handle version formats
+                        constraint = "^"  # Default
+                        clean_version = version
+                        
+                        if version.startswith("^"):
+                            constraint = "^"
+                            clean_version = version[1:]
+                        elif version.startswith("~"):
+                            constraint = "~"
+                            clean_version = version[1:]
+                        
+                        dependencies.append({
+                            "name": name,
+                            "version": clean_version,
+                            "constraint": constraint,
+                            "type": dep_type,
+                            "file": str(file_path)
+                        })
+        except Exception as e:
+            logger.error(f"Error parsing {file_path}: {str(e)}")
+        
+        return dependencies
+    
+    def _parse_pom_xml(self, file_path: Path) -> List[Dict[str, str]]:
+        """Parse Maven pom.xml file."""
+        dependencies = []
+        try:
+            # Simple regex-based parsing for demonstration
+            content = file_path.read_text()
+            
+            # Find dependencies
+            dep_pattern = r"<dependency>[\s\S]*?<groupId>(.*?)</groupId>[\s\S]*?<artifactId>(.*?)</artifactId>[\s\S]*?<version>(.*?)</version>[\s\S]*?</dependency>"
+            matches = re.findall(dep_pattern, content)
+            
+            for group_id, artifact_id, version in matches:
+                dependencies.append({
+                    "name": f"{group_id}:{artifact_id}",
+                    "group_id": group_id,
+                    "artifact_id": artifact_id,
+                    "version": version,
+                    "file": str(file_path)
+                })
+        except Exception as e:
+            logger.error(f"Error parsing {file_path}: {str(e)}")
+        
+        return dependencies
+    
+    def _find_upgrade_candidates(self, project_type: str, dependencies: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """Find upgrade candidates for the dependencies."""
+        upgrade_candidates = []
+        
+        for dep in dependencies:
+            if project_type == "python":
+                candidates = self._check_python_upgrade(dep)
+                if candidates:
+                    upgrade_candidates.append(candidates)
+            
+            elif project_type == "nodejs":
+                candidates = self._check_nodejs_upgrade(dep)
+                if candidates:
+                    upgrade_candidates.append(candidates)
+            
+            elif project_type == "maven":
+                candidates = self._check_maven_upgrade(dep)
+                if candidates:
+                    upgrade_candidates.append(candidates)
+            
+            # Add other project type checkers as needed
+        
+        return upgrade_candidates
+    
+    def _check_python_upgrade(self, dependency: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Check for Python package upgrades using pip."""
+        try:
+            package_name = dependency["name"]
+            current_version = dependency["version"]
+            
+            # Run pip to get latest version
+            result = subprocess.run(
+                ["pip", "index", "versions", package_name],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                # Parse the output to find the latest version
+                output = result.stdout
+                available_versions = re.findall(r"Available versions: (.*)", output)
+                
+                if available_versions:
+                    versions = available_versions[0].split(", ")
+                    latest_version = versions[0]  # First one is usually the latest
+                    
+                    if latest_version != current_version:
+                        return {
+                            "name": package_name,
+                            "current_version": current_version,
+                            "latest_version": latest_version,
+                            "file": dependency["file"]
+                        }
+        except Exception as e:
+            logger.error(f"Error checking upgrade for {dependency['name']}: {str(e)}")
+        
+        return None
+    
+    def _check_nodejs_upgrade(self, dependency: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Check for Node.js package upgrades using npm."""
+        try:
+            package_name = dependency["name"]
+            current_version = dependency["version"]
+            
+            # Run npm to get latest version
+            result = subprocess.run(
+                ["npm", "view", package_name, "version"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                latest_version = result.stdout.strip()
+                
+                if latest_version != current_version:
+                    return {
+                        "name": package_name,
+                        "current_version": current_version,
+                        "latest_version": latest_version,
+                        "type": dependency.get("type", "dependencies"),
+                        "file": dependency["file"]
+                    }
+        except Exception as e:
+            logger.error(f"Error checking upgrade for {dependency['name']}: {str(e)}")
+        
+        return None
+    
+    def _check_maven_upgrade(self, dependency: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Check for Maven package upgrades using Maven API."""
+        try:
+            group_id = dependency["group_id"]
+            artifact_id = dependency["artifact_id"]
+            current_version = dependency["version"]
+            
+            # Use Maven Central API to get latest version
+            # This is a simplified example - in practice, you might want to use a proper Maven API client
+            import requests
+            url = f"https://search.maven.org/solrsearch/select?q=g:{group_id}+AND+a:{artifact_id}&rows=20&wt=json"
+            
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if data["response"]["numFound"] > 0:
+                    docs = data["response"]["docs"]
+                    latest_version = docs[0]["latestVersion"]
+                    
+                    if latest_version != current_version:
+                        return {
+                            "name": f"{group_id}:{artifact_id}",
+                            "group_id": group_id,
+                            "artifact_id": artifact_id,
+                            "current_version": current_version,
+                            "latest_version": latest_version,
+                            "file": dependency["file"]
+                        }
+        except Exception as e:
+            logger.error(f"Error checking upgrade for {dependency['name']}: {str(e)}")
+        
+        return None
+```
+
+## 7. Git Operations Tool
+
+### `tools/git_operations.py`
+
+```python
+import os
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+
+import git
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from config.settings import PROJECT_PATH, GITHUB_TOKEN, GITHUB_USERNAME, GITHUB_EMAIL
+
+logger = logging.getLogger(__name__)
+
+class GitOperationInput(BaseModel):
+    operation: str = Field(..., description="Git operation to perform: create_branch, commit, push, or create_pr")
+    branch_name: Optional[str] = Field(None, description="Branch name for create_branch, push, or create_pr")
+    commit_message: Optional[str] = Field(None, description="Commit message for commit operation")
+    pr_title: Optional[str] = Field(None, description="Pull request title for create_pr operation")
+    pr_description: Optional[str] = Field(None, description="Pull request description for create_pr operation")
+    files: Optional[List[str]] = Field(None, description="List of files to add for commit operation")
+    base_branch: Optional[str] = Field("main", description="Base branch for create_pr operation")
+
+class GitOperationsTool(BaseTool):
+    name = "git_operations"
+    description = "Performs Git operations like creating branches, committing changes, pushing to remote, and creating pull requests"
+    args_schema = GitOperationInput
+    
+    def __init__(self):
+        super().__init__()
+        self.repo_path = PROJECT_PATH
+        try:
+            self.repo = git.Repo(self.repo_path)
+            # Configure git user
+            if GITHUB_USERNAME and GITHUB_EMAIL:
+                self.repo.git.config("user.name", GITHUB_USERNAME)
+                self.repo.git.config("user.email", GITHUB_EMAIL)
+        except git.exc.InvalidGitRepositoryError:
+            logger.error(f"{self.repo_path} is not a valid Git repository")
+            self.repo = None
+    
+    def _run(self, operation: str, branch_name: Optional[str] = None, 
+             commit_message: Optional[str] = None, pr_title: Optional[str] = None, 
+             pr_description: Optional[str] = None, files: Optional[List[str]] = None,
+             base_branch: Optional[str] = "main") -> Dict[str, Any]:
+        """Run Git operations."""
+        if not self.repo:
+            return {"error": f"{self.repo_path} is not a valid Git repository"}
+        
+        if operation == "create_branch":
+            return self._create_branch(branch_name)
+        elif operation == "commit":
+            return self._commit_changes(commit_message, files)
+        elif operation == "push":
+            return self._push_changes(branch_name)
+        elif operation == "create_pr":
+            return self._create_pull_request(branch_name, base_branch, pr_title, pr_description)
+        else:
+            return {"error": f"Unknown operation: {operation}"}
+    
+    def _create_branch(self, branch_name: str) -> Dict[str, Any]:
+        """Create a new Git branch."""
+        if not branch_name:
+            return {"error": "Branch name is required"}
+        
+        try:
+            # Check if branch already exists
+            if branch_name in [ref.name.split('/')[-1] for ref in self.repo.refs]:
+                # Checkout existing branch
+                self.repo.git.checkout(branch_name)
+                return {"success": True, "message": f"Switched to existing branch: {branch_name}"}
+            
+            # Create and checkout new branch
+            self.repo.git.checkout('-b', branch_name)
+            return {"success": True, "message": f"Created and switched to new branch: {branch_name}"}
+        except git.GitCommandError as e:
+            logger.error(f"Git error creating branch {branch_name}: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    def _commit_changes(self, commit_message: str, files: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Commit changes to Git repository."""
+        if not commit_message:
+            return {"error": "Commit message is required"}
+        
+        try:
+            # Add specific files or all changes
+            if files:
+                for file in files:
+                    file_path = Path(self.repo_path) / file
+                    if file_path.exists():
+                        self.repo.git.add(file)
+                    else:
+                        logger.warning(f"File not found: {file}")
+            else:
+                self.repo.git.add('.')
+            
+            # Check if there are changes to commit
+            if not self.repo.git.diff('--staged'):
+                return {"success": False, "message": "No changes to commit"}
+            
+            # Commit changes
+            self.repo.git.commit('-m', commit_message)
+            return {"success": True, "message": f"Changes committed with message: {commit_message}"}
+        except git.GitCommandError as e:
+            logger.error(f"Git error committing changes: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    def _push_changes(self, branch_name: Optional[str] = None) -> Dict[str, Any]:
+        """Push changes to remote repository."""
+        try:
+            if branch_name:
+                self.repo.git.push('--set-upstream', 'origin', branch_name)
+            else:
+                self.repo.git.push()
+            
+            current_branch = self.repo.active_branch.name
+            return {"success": True, "message": f"Changes pushed to {current_branch}"}
+        except git.GitCommandError as e:
+            logger.error(f"Git error pushing changes: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    def _create_pull_request(self, branch_name: str, base_branch: str, 
+                           pr_title: str, pr_description: str) -> Dict[str, Any]:
+        """Create a pull request using GitHub API."""
+        if not all([branch_name, pr_title, GITHUB_TOKEN]):
+            missing = []
+            if not branch_name:
+                missing.append("branch_name")
+            if not pr_title:
+                missing.append("pr_title")
+            if not GITHUB_TOKEN:
+                missing.append("GITHUB_TOKEN")
+            
+            return {"error": f"Missing required parameters: {', '.join(missing)}"}
+        
+        try:
+            import requests
+            
+            # Get repository info from remote URL
+            remote_url = self.repo.remotes.origin.url
+            repo_info = self._extract_repo_info(remote_url)
+            
+            if not repo_info:
+                return {"error": f"Could not extract repository info from {remote_url}"}
+            
+            # Create pull request
+            url = f"https://api.github.com/repos/{repo_info['owner']}/{repo_info['repo']}/pulls"
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            
+            data = {
+                "title": pr_title,
+                "body": pr_description,
+                "head": branch_name,
+                "base": base_branch
+            }
+            
+            response = requests.post(url, headers=headers, json=data)
+            
+            if response.status_code == 201:
+                pr_data = response.json()
+                return {
+                    "success": True,
+                    "message": f"Pull request created: {pr_data['html_url']}",
+                    "pr_url": pr_data['html_url'],
+                    "pr_number": pr_data['number']
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to create PR: {response.status_code} - {response.text}"
+                }
+        except Exception as e:
+            logger.error(f"Error creating pull request: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    def _extract_repo_info(self, remote_url: str) -> Optional[Dict[str, str]]:
+        """Extract owner and repo name from remote URL."""
+        # Handle different URL formats
+        if remote_url.startswith("https://github.com/"):
+            parts = remote_url.replace("https://github.com/", "").replace(".git", "").split("/")
+            if len(parts) >= 2:
+                return {"owner": parts[0], "repo": parts[1]}
+        
+        elif remote_url.startswith("git@github.com:"):
+            parts = remote_url.replace("git@github.com:", "").replace(".git", "").split("/")
+            if len(parts) >= 2:
+                return {"owner": parts[0], "repo": parts[1]}
+        
+        return None
+```
+
+## 8. Code Analysis and Modification Tool
+
+### `tools/code_analysis.py`
+
+```python
+import os
+import logging
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from config.settings import PROJECT_PATH
+from tools.vector_db import CodeVectorDB
+
+logger = logging.getLogger(__name__)
+
+class CodeAnalysisInput(BaseModel):
+    operation: str = Field(..., description="Operation to perform: analyze_file, modify_file, search_code, or get_file")
+    file_path: Optional[str] = Field(None, description="Path to the file relative to project root")
+    query: Optional[str] = Field(None, description="Query for searching code")
+    new_content: Optional[str] = Field(None, description="New content for file modification")
+    n_results: Optional[int] = Field(5, description="Number of results to return for search operation")
+
+class CodeAnalysisTool(BaseTool):
+    name = "code_analysis"
+    description = "Analyzes and modifies code files, searches codebase for relevant code"
+    args_schema = CodeAnalysisInput
+    
+    def __init__(self):
+        super().__init__()
+        self.project_path = PROJECT_PATH
+        self.vector_db = CodeVectorDB()
+    
+    def _run(self, operation: str, file_path: Optional[str] = None, 
+             query: Optional[str] = None, new_content: Optional[str] = None,
+             n_results: Optional[int] = 5) -> Dict[str, Any]:
+        """Run code analysis operations."""
+        if operation == "analyze_file":
+            return self._analyze_file(file_path)
+        elif operation == "modify_file":
+            return self._modify_file(file_path, new_content)
+        elif operation == "search_code":
+            return self._search_code(query, n_results)
+        elif operation == "get_file":
+            return self._get_file(file_path)
+        else:
+            return {"error": f"Unknown operation: {operation}"}
+    
+    def _analyze_file(self, file_path: str) -> Dict[str, Any]:
+        """Analyze a code file."""
+        if not file_path:
+            return {"error": "File path is required"}
+        
+        full_path = self.project_path / file_path
+        if not full_path.exists():
+            return {"error": f"File not found: {file_path}"}
+        
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            
+            # Basic file analysis
+            file_info = {
+                "file_path": file_path,
+                "size_bytes": full_path.stat().st_size,
+                "extension": full_path.suffix,
+                "content": content,
+                "line_count": len(content.splitlines())
+            }
+            
+            # Add language-specific analysis
+            if file_path.endswith('.py'):
+                file_info.update(self._analyze_python_file(content))
+            elif file_path.endswith('.js') or file_path.endswith('.ts'):
+                file_info.update(self._analyze_js_file(content))
+            elif file_path.endswith('.java'):
+                file_info.update(self._analyze_java_file(content))
+            
+            return file_info
+        except Exception as e:
+            logger.error(f"Error analyzing file {file_path}: {str(e)}")
+            return {"error": f"Error analyzing file: {str(e)}"}
+    
+    def _analyze_python_file(self, content: str) -> Dict[str, Any]:
+        """Analyze Python file."""
+        import re
+        
+        # Find imports
+        import_pattern = r'^import\s+(\w+)|^from\s+(\w+(?:\.\w+)*)\s+import'
+        imports = set()
+        
+        for match in re.finditer(import_pattern, content, re.MULTILINE):
+            if match.group(1):
+                imports.add(match.group(1))
+            elif match.group(2):
+                imports.add(match.group(2).split('.')[0])
+        
+        # Find class definitions
+        class_pattern = r'class\s+(\w+)'
+        classes = re.findall(class_pattern, content)
+        
+        # Find function definitions
+        function_pattern = r'def\s+(\w+)'
+        functions = re.findall(function_pattern, content)
+        
+        return {
+            "language": "python",
+            "imports": list(imports),
+            "classes": classes,
+            "functions": functions
+        }
+    
+    def _analyze_js_file(self, content: str) -> Dict[str, Any]:
+        """Analyze JavaScript/TypeScript file."""
+        import re
+        
+        # Find imports
+        import_pattern = r'(?:import|require)\s*\(?[\'"](.+?)[\'"]'
+        imports = re.findall(import_pattern, content)
+        
+        # Find class definitions
+        class_pattern = r'class\s+(\w+)'
+        classes = re.findall(class_pattern, content)
+        
+        # Find function definitions
+        function_pattern = r'(?:function|const|let|var)\s+(\w+)\s*\('
+        functions = re.findall(function_pattern, content)
+        
+        return {
+            "language": "javascript/typescript",
+            "imports": imports,
+            "classes": classes,
+            "functions": functions
+        }
+    
+    def _analyze_java_file(self, content: str) -> Dict[str, Any]:
+        """Analyze Java file."""
+        import re
+        
+        # Find imports
+        import_pattern = r'import\s+(.+?);'
+        imports = re.findall(import_pattern, content)
+        
+        # Find class definitions
+        class_pattern = r'(?:public|private|protected)?\s*class\s+(\w+)'
+        classes = re.findall(class_pattern, content)
+        
+        # Find method definitions
+        method_pattern = r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\('
+        methods = re.findall(method_pattern, content)
+        
+        return {
+            "language": "java",
+            "imports": imports,
+            "classes": classes,
+            "methods": methods
+        }
+    
+    def _modify_file(self, file_path: str, new_content: str) -> Dict[str, Any]:
+        """Modify a code file."""
+        if not file_path or not new_content:
+            missing = []
+            if not file_path:
+                missing.append("file_path")
+            if not new_content:
+                missing.append("new_content")
+            
+            return {"error": f"Missing required parameters: {', '.join(missing)}"}
+        
+        full_path = self.project_path / file_path
+        
+        try:
+            # Create directories if they don't exist
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save original content for comparison
+            original_content = ""
+            if full_path.exists():
+                original_content = full_path.read_text(encoding='utf-8')
+            
+            # Write new content
+            full_path.write_text(new_content, encoding='utf-8')
+            
+            return {
+                "success": True,
+                "file_path": file_path,
+                "message": "File modified successfully",
+                "is_new_file": not original_content,
+                "changed_lines": len(new_content.splitlines()) if not original_content else self._count_changed_lines(original_content, new_content)
+            }
+        except Exception as e:
+            logger.error(f"Error modifying file {file_path}: {str(e)}")
+            return {"error": f"Error modifying file: {str(e)}"}
+    
+    def _count_changed_lines(self, original: str, new: str) -> int:
+        """Count the number of changed lines between original and new content."""
+        original_lines = original.splitlines()
+        new_lines = new.splitlines()
+        
+        # Use difflib for a more sophisticated diff
+        import difflib
+        diff = difflib.unified_diff(original_lines, new_lines, n=0)
+        
+        # Count changed lines
+        changed_lines = 0
+        for line in diff:
+            if line.startswith('+') or line.startswith('-'):
+                if not line.startswith('+++') and not line.startswith('---'):
+                    changed_lines += 1
+        
+        return changed_lines
+    
+    def _search_code(self, query: str, n_results: int = 5) -> Dict[str, Any]:
+        """Search codebase for relevant code."""
+        if not query:
+            return {"error": "Query is required"}
+        
+        try:
+            # Ensure vector database is initialized
+            if not hasattr(self.vector_db, 'vector_store') or self.vector_db.vector_store is None:
+                self.vector_db.embed_project()
+            
+            # Search for relevant code
+            results = self.vector_db.query_codebase(query, n_results)
+            
+            return {
+                "query": query,
+                "results": results,
+                "result_count": len(results)
+            }
+        except Exception as e:
+            logger.error(f"Error searching code: {str(e)}")
+            return {"error": f"Error searching code: {str(e)}"}
+    
+    def _get_file(self, file_path: str) -> Dict[str, Any]:
+        """Get file content."""
+        if not file_path:
+            return {"error": "File path is required"}
+        
+        full_path = self.project_path / file_path
+        if not full_path.exists():
+            return {"error": f"File not found: {file_path}"}
+        
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            
+            return {
+                "file_path": file_path,
+                "content": content,
+                "size_bytes": full_path.stat().st_size,
+                "extension": full_path.suffix
+            }
+        except Exception as e:
+            logger.error(f"Error getting file {file_path}: {str(e)}")
+            return {"error": f"Error getting file: {str(e)}"}
+```
+
+## 9. Compilation and Test Tool
+
+### `tools/compilation.py`
+
+```python
+import os
+import logging
+import subprocess
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from config.settings import PROJECT_PATH
+
+logger = logging.getLogger(__name__)
+
+class CompilationInput(BaseModel):
+    operation: str = Field(..., description="Operation to perform: compile or test")
+    test_files: Optional[List[str]] = Field(None, description="List of test files to run")
+    test_command: Optional[str] = Field(None, description="Custom test command to run")
+    build_command: Optional[str] = Field(None, description="Custom build command to run")
+
+class CompilationTool(BaseTool):
+    name = "compilation"
+    description = "Compiles the project and runs tests"
+    args_schema = CompilationInput
+    
+    def __init__(self):
+        super().__init__()
+        self.project_path = PROJECT_PATH
+    
+    def _run(self, operation: str, test_files: Optional[List[str]] = None,
+             test_command: Optional[str] = None, build_command: Optional[str] = None) -> Dict[str, Any]:
+        """Run compilation or test operations."""
+        if operation == "compile":
+            return self._compile_project(build_command)
+        elif operation == "test":
+            return self._run_tests(test_files, test_command)
+        else:
+            return {"error": f"Unknown operation: {operation}"}
+    
+    def _compile_project(self, build_command: Optional[str] = None) -> Dict[str, Any]:
+        """Compile the project."""
+        try:
+            # Detect project type and run appropriate build command
+            if build_command:
+                # Use custom build command if provided
+                return self._run_command(build_command)
+            else:
+                # Auto-detect project type and use appropriate build command
+                project_type = self._detect_project_type()
+                
+                if project_type == "python":
+                    # For Python, check syntax
+                    return self._check_python_syntax()
+                elif project_type == "nodejs":
+                    # For Node.js, run npm build
+                    return self._run_command("npm run build")
+                elif project_type == "maven":
+                    # For Maven, run mvn compile
+                    return self._run_command("mvn compile")
+                elif project_type == "gradle":
+                    # For Gradle, run gradle build
+                    return self._run_command("./gradlew build -x test")
+                elif project_type == "dotnet":
+                    # For .NET, run dotnet build
+                    return self._run_command("dotnet build")
+                else:
+                    return {"error": f"Could not determine project type for compilation"}
+        except Exception as e:
+            logger.error(f"Error compiling project: {str(e)}")
+            return {"error": f"Error compiling project: {str(e)}"}
+    
+    def _run_tests(self, test_files: Optional[List[str]] = None,
+                  test_command: Optional[str] = None) -> Dict[str, Any]:
+        """Run project tests."""
+        try:
+            # Use custom test command if provided
+            if test_command:
+                return self._run_command(test_command)
+            
+            # Auto-detect project type and use appropriate test command
+            project_type = self._detect_project_type()
+            
+            if project_type == "python":
+                # For Python, run pytest or unittest
+                if Path(self.project_path / "pytest.ini").exists() or list(self.project_path.glob("**/test_*.py")):
+                    if test_files:
+                        return self._run_command(f"pytest {' '.join(test_files)}")
+                    else:
+                        return self._run_command("pytest")
+                else:
+                    if test_files:
+                        return self._run_command(f"python -m unittest {' '.join(test_files)}")
+                    else:
+                        return self._run_command("python -m unittest discover")
+            
+            elif project_type == "nodejs":
+                # For Node.js, run npm test
+                return self._run_command("npm test")
+            
+            elif project_type == "maven":
+                # For Maven, run mvn test
+                if test_files:
+                    test_classes = " ".join([f"-Dtest={Path(f).stem}" for f in test_files])
+                    return self._run_command(f"mvn test {test_classes}")
+                else:
+                    return self._run_command("mvn test")
+            
+            elif project_type == "gradle":
+                # For Gradle, run gradle test
+                return self._run_command("./gradlew test")
+            
+            elif project_type == "dotnet":
+                # For .NET, run dotnet test
+                if test_files:
+                    return self._run_command(f"dotnet test {' '.join(test_files)}")
+                else:
+                    return self._run_command("dotnet test")
+            
+            else:
+                return {"error": f"Could not determine project type for testing"}
+        except Exception as e:
+            logger.error(f"Error running tests: {str(e)}")
+            return {"error": f"Error running tests: {str(e)}"}
+    
+    def _detect_project_type(self) -> Optional[str]:
+        """Detect the type of project."""
+        # Check for Python project
+        if list(self.project_path.glob("**/requirements.txt")) or \
+           list(self.project_path.glob("**/setup.py")) or \
+           list(self.project_path.glob("**/pyproject.toml")):
+            return "python"
+        
+        # Check for Node.js project
+        if list(self.project_path.glob("**/package.json")):
+            return "nodejs"
+        
+        # Check for Maven project
+        if list(self.project_path.glob("**/pom.xml")):
+            return "maven"
+        
+        # Check for Gradle project
+        if list(self.project_path.glob("**/build.gradle")) or \
+           list(self.project_path.glob("**/build.gradle.kts")):
+            return "gradle"
+        
+        # Check for .NET project
+        if list(self.project_path.glob("**/*.csproj")) or \
+           list(self.project_path.glob("**/*.sln")):
+            return "dotnet"
+        
+        return None
+    
+    def _check_python_syntax(self) -> Dict[str, Any]:
+        """Check Python syntax."""
+        python_files = []
+        for ext in [".py"]:
+            python_files.extend(list(self.project_path.glob(f"**/*{ext}")))
+        
+        # Filter out files in directories that should be ignored
+        ignored_dirs = ['venv', '.git', '.vscode', '__pycache__', 'node_modules']
+        python_files = [
+            f for f in python_files 
+            if not any(ignored_dir in str(f) for ignored_dir in ignored_dirs)
+        ]
+        
+        errors = []
+        for file_path in python_files:
+            try:
+                # Check syntax using py_compile
+                result = subprocess.run(
+                    ["python", "-m", "py_compile", str(file_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode != 0:
+                    errors.append({
+                        "file": str(file_path.relative_to(self.project_path)),
+                        "error": result.stderr.strip()
+                    })
+            except Exception as e:
+                errors.append({
+                    "file": str(file_path.relative_to(self.project_path)),
+                    "error": str(e)
+                })
+        
+        if errors:
+            return {
+                "success": False,
+                "errors": errors,
+                "message": f"Found {len(errors)} files with syntax errors"
+            }
+        else:
+            return {
+                "success": True,
+                "message": f"All {len(python_files)} Python files passed syntax check"
+            }
+    
+    def _run_command(self, command: str) -> Dict[str, Any]:
+        """Run a shell command in the project directory."""
+        try:
+            logger.info(f"Running command: {command}")
+            
+            # Run the command
+            process = subprocess.run(
+                command,
+                shell=True,
+                cwd=self.project_path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            # Process the result
+            if process.returncode == 0:
+                return {
+                    "success": True,
+                    "command": command,
+                    "output": process.stdout,
+                    "message": f"Command executed successfully"
+                }
+            else:
+                return {
+                    "success": False,
+                    "command": command,
+                    "output": process.stdout,
+                    "error": process.stderr,
+                    "message": f"Command failed with exit code {process.returncode}"
+                }
+        except Exception as e:
+            logger.error(f"Error running command '{command}': {str(e)}")
+            return {
+                "success": False,
+                "command": command,
+                "error": str(e),
+                "message": f"Error executing command"
+            }
+```
+
+## 10. Test Generator Tool
+
+### `tools/test_generator.py`
+
+```python
+import os
+import logging
+import re
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from config.settings import PROJECT_PATH, LLM_PROVIDER
+from tools.vector_db import CodeVectorDB
+from langchain_community.chat_models import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from config.settings import ANTHROPIC_API_KEY, OPENAI_API_KEY, ANTHROPIC_MODEL, OPENAI_MODEL
+
+logger = logging.getLogger(__name__)
+
+class TestGeneratorInput(BaseModel):
+    file_path: str = Field(..., description="Path to the file to generate tests for")
+    test_framework: Optional[str] = Field(None, description="Test framework to use (e.g., pytest, junit)")
+    output_path: Optional[str] = Field(None, description="Path to save the generated tests")
+
+class TestGeneratorTool(BaseTool):
+    name = "test_generator"
+    description = "Generates test cases for code files"
+    args_schema = TestGeneratorInput
+    
+    def __init__(self):
+        super().__init__()
+        self.project_path = PROJECT_PATH
+        self.vector_db = CodeVectorDB()
+        
+        # Initialize LLM based on configuration
+        if LLM_PROVIDER.lower() == "anthropic":
+            self.llm = ChatAnthropic(
+                model=ANTHROPIC_MODEL,
+                anthropic_api_key=ANTHROPIC_API_KEY,
+                temperature=0.2
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model=OPENAI_MODEL,
+                openai_api_key=OPENAI_API_KEY,
+                temperature=0.2
+            )
+    
+    def _run(self, file_path: str, test_framework: Optional[str] = None,
+             output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Generate test cases for a code file."""
+        if not file_path:
+            return {"error": "File path is required"}
+        
+        full_path = self.project_path / file_path
+        if not full_path.exists():
+            return {"error": f"File not found: {file_path}"}
+        
+        try:
+            # Read file content
+            file_content = full_path.read_text(encoding='utf-8')
+            
+            # Determine file type and appropriate test framework
+            file_type = full_path.suffix
+            if not test_framework:
+                test_framework = self._determine_test_framework(file_type)
+            
+            # Get similar code and existing tests for context
+            context = self._get_context(file_path, file_type)
+            
+            # Generate tests using LLM
+            tests = self._generate_tests(file_content, file_path, file_type, test_framework, context)
+            
+            # Save tests if output path is provided
+            if output_path:
+                self._save_tests(tests, output_path)
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "test_framework": test_framework,
+                    "output_path": output_path,
+                    "tests": tests
+                }
+            else:
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "test_framework": test_framework,
+                    "tests": tests
+                }
+        except Exception as e:
+            logger.error(f"Error generating tests for {file_path}: {str(e)}")
+            return {"error": f"Error generating tests: {str(e)}"}
+    
+    def _determine_test_framework(self, file_type: str) -> str:
+        """Determine appropriate test framework based on file type."""
+        if file_type == '.py':
+            # Check if pytest is used in the project
+            if list(self.project_path.glob("**/pytest.ini")) or list(self.project_path.glob("**/conftest.py")):
+                return "pytest"
+            else:
+                return "unittest"
+        elif file_type in ['.js', '.ts', '.jsx', '.tsx']:
+            # Check for Jest, Mocha, or other JS test frameworks
+            package_json = self.project_path / "package.json"
+            if package_json.exists():
+                content = package_json.read_text()
+                if "jest" in content:
+                    return "jest"
+                elif "mocha" in content:
+                    return "mocha"
+            return "jest"  # Default to Jest
+        elif file_type == '.java':
+            return "junit"
+        elif file_type in ['.cs', '.vb']:
+            return "xunit"
+        else:
+            return "generic"
+    
+    def _get_context(self, file_path: str, file_type: str) -> Dict[str, Any]:
+        """Get context for test generation, including similar code and existing tests."""
+        # Ensure vector database is initialized
+        if not hasattr(self.vector_db, 'vector_store') or self.vector_db.vector_store is None:
+            self.vector_db.embed_project()
+        
+        # Get file name without extension
+        file_name = Path(file_path).stem
+        
+        # Search for similar code
+        similar_code = self.vector_db.query_codebase(f"code similar to {file_path}", 3)
+        
+        # Search for existing tests
+        test_file_patterns = {
+            '.py': [f"test_{file_name}.py", f"{file_name}_test.py"],
+            '.js': [f"{file_name}.test.js", f"{file_name}.spec.js"],
+            '.ts': [f"{file_name}.test.ts", f"{file_name}.spec.ts"],
+            '.java': [f"{file_name}Test.java", f"Test{file_name}.java"],
+            '.cs': [f"{file_name}Tests.cs", f"Test{file_name}.cs"]
+        }
+        
+        existing_tests = []
+        patterns = test_file_patterns.get(file_type, [f"test_{file_name}.*", f"{file_name}_test.*"])
+        
+        for pattern in patterns:
+            for test_file in self.project_path.glob(f"**/{pattern}"):
+                try:
+                    content = test_file.read_text(encoding='utf-8')
+                    existing_tests.append({
+                        "path": str(test_file.relative_to(self.project_path)),
+                        "content": content
+                    })
+                except Exception as e:
+                    logger.warning(f"Could not read test file {test_file}: {str(e)}")
+        
+        return {
+            "similar_code": similar_code,
+            "existing_tests": existing_tests
+        }
+    
+    def _generate_tests(self, file_content: str, file_path: str, file_type: str,
+                        test_framework: str, context: Dict[str, Any]) -> str:
+        """Generate test cases using LLM."""
+        # Create prompt for test generation
+        prompt = self._create_test_prompt(file_content, file_path, file_type, test_framework, context)
+        
+        # Generate tests using LLM
+        from langchain.schema import HumanMessage, SystemMessage
+        
+        messages = [
+            SystemMessage(content="""You are an expert test engineer who writes high-quality, comprehensive test cases.
+            Generate test cases that cover all functionality, edge cases, and error conditions.
+            Follow best practices for the specified test framework.
+            Include comments explaining the purpose of each test.
+            """),
+            HumanMessage(content=prompt)
+        ]
+        
+        response = self.llm.invoke(messages)
+        
+        # Extract code blocks from response
+        import re
+        code_pattern = r"```(?:\w+)?\n([\s\S]*?)\n```"
+        code_matches = re.findall(code_pattern, response.content)
+        
+        if code_matches:
+            return code_matches[0]
+        else:
+            # If no code block found, return the whole response
+            return response.content
+    
+    def _create_test_prompt(self, file_content: str, file_path: str, file_type: str,
+                          test_framework: str, context: Dict[str, Any]) -> str:
+        """Create prompt for test generation."""
+        prompt = f"""I need to generate tests for the following code file:
+
+File path: {file_path}
+File type: {file_type}
+Test framework to use: {test_framework}
+
+Here is the content of the file:
+
+```
+{file_content}
+```
+
+"""
+        
+        # Add context about existing tests if available
+        if context["existing_tests"]:
+            prompt += "\nHere are some existing tests in the project that might be helpful:\n\n"
+            for test in context["existing_tests"][:2]:  # Limit to 2 test files to avoid token limits
+                prompt += f"Test file: {test['path']}\n```\n{test['content']}\n```\n\n"
+        
+        # Add context about similar code if available
+        if context["similar_code"]:
+            prompt += "\nHere are some similar code files in the project:\n\n"
+            for code in context["similar_code"][:2]:  # Limit to 2 similar files
+                prompt += f"File: {code['source']}\n```\n{code['content']}\n```\n\n"
+        
+        # Add specific instructions based on test framework
+        if test_framework == "pytest":
+            prompt += """
+Please generate pytest tests for this file. Include:
+- Proper imports and fixtures
+- Test functions that start with 'test_'
+- Use of pytest assertions
+- Mocking where appropriate
+- Edge case testing
+- Parametrized tests where applicable
+"""
+        elif test_framework == "unittest":
+            prompt += """
+Please generate unittest tests for this file. Include:
+- A TestCase class that inherits from unittest.TestCase
+- Test methods that start with 'test_'
+- Proper use of setUp and tearDown methods if needed
+- Appropriate assertions
+- Edge case testing
+"""
+        elif test_framework == "jest":
+            prompt += """
+Please generate Jest tests for this file. Include:
+- Proper describe and it blocks
+- Use of expect assertions
+- Mocking where appropriate
+- Edge case testing
+- Before/after hooks if needed
+"""
+        
+        prompt += "\nPlease provide the complete test file that I can use directly without modifications."
+        
+        return prompt
+    
+    def _save_tests(self, tests: str, output_path: str) -> None:
+        """Save generated tests to a file."""
+        full_path = self.project_path / output_path
+        
+        # Create directories if they don't exist
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write tests to file
+        full_path.write_text(tests, encoding='utf-8')
+        logger.info(f"Tests saved to {output_path}")
+```
+
+## 11. LLM Setup and Agent Implementation
+
+### `agents/upgrade_agent.py`
+
+```python
+import logging
+from typing import List, Dict, Any, Optional
+
+from langchain.agents import AgentExecutor, create_openai_functions_agent
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.memory import ConversationBufferMemory
+from langchain.schema import SystemMessage, HumanMessage, AIMessage
+from langchain_community.chat_models import ChatAnthropic
+from langchain_openai import ChatOpenAI
+
+from config.settings import LLM_PROVIDER, ANTHROPIC_API_KEY, OPENAI_API_KEY, ANTHROPIC_MODEL, OPENAI_MODEL
+from tools.dependency_scanner import DependencyScanner
+from tools.code_analysis import CodeAnalysisTool
+from tools.git_operations import GitOperationsTool
+from tools.compilation import CompilationTool
+from tools.test_generator import TestGeneratorTool
+from tools.vector_db import CodeVectorDB
+from utils.message_formatter import MessageFormatter, Role
+
+logger = logging.getLogger(__name__)
+
+class UpgradeAgent:
+    def __init__(self):
+        self.vector_db = CodeVectorDB()
+        self.tools = self._setup_tools()
+        self.llm = self._setup_llm()
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True
+        )
+        self.agent_executor = self._setup_agent()
+    
+    def _setup_tools(self) -> List[Any]:
+        """Set up the tools for the agent."""
+        return [
+            DependencyScanner(),
+            CodeAnalysisTool(),
+            GitOperationsTool(),
+            CompilationTool(),
+            TestGeneratorTool()
+        ]
+    
+    def _setup_llm(self) -> Any:
+        """Set up the language model based on configuration."""
+        if LLM_PROVIDER.lower() == "anthropic":
+            return ChatAnthropic(
+                model=ANTHROPIC_MODEL,
+                anthropic_api_key=ANTHROPIC_API_KEY,
+                temperature=0.2
+            )
+        else:
+            return ChatOpenAI(
+                model=OPENAI_MODEL,
+                openai_api_key=OPENAI_API_KEY,
+                temperature=0.2
+            )
+    
+    def _setup_agent(self) -> AgentExecutor:
+        """Set up the agent with tools and LLM."""
+        # Create system prompt
+        system_prompt = """You are an expert software engineer specializing in dependency upgrades and code maintenance.
+        Your task is to help upgrade dependencies in software projects, analyze the impact of these upgrades,
+        implement necessary code changes, and validate the changes through testing.
+        
+        You have access to the following tools:
+        1. dependency_scanner: Scans a project for dependencies and identifies upgrade candidates
+        2. code_analysis: Analyzes and modifies code files, searches codebase for relevant code
+        3. git_operations: Performs Git operations like creating branches, committing changes, pushing to remote, and creating pull requests
+        4. compilation: Compiles the project and runs tests
+        5. test_generator: Generates test cases for code files
+        
+        Follow these steps when upgrading dependencies:
+        1. Scan the project to identify dependencies and upgrade candidates
+        2. For each upgrade candidate, analyze the potential impact on the codebase
+        3. Create a new branch for the upgrade
+        4. Implement necessary code changes to accommodate the upgrade
+        5. Generate and update tests as needed
+        6. Compile the project and run tests to validate changes
+        7. If compilation or tests fail, fix the issues
+        8. Once everything passes, commit the changes, push the branch, and create a pull request
+        
+        Always explain your reasoning and the changes you're making.
+        """
+        
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="chat_history"),
+            HumanMessage(content="{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad")
+        ])
+        
+        # Create agent
+        agent = create_openai_functions_agent(self.llm, self.tools, prompt)
+        
+        # Create agent executor
+        return AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            memory=self.memory,
+            verbose=True,
+            handle_parsing_errors=True
+        )
+    
+    def run(self, query: str) -> Dict[str, Any]:
+        """Run the agent with a query."""
+        logger.info(f"Running agent with query: {query}")
+        
+        # Format the query message
+        formatted_query = MessageFormatter.format_message(Role.USER, query)
+        print(formatted_query)
+        
+        # Run the agent
+        result = self.agent_executor.invoke({"input": query})
+        
+        # Format the response message
+        formatted_response = MessageFormatter.format_message(Role.ASSISTANT, result["output"])
+        print(formatted_response)
+        
+        return result
+    
+    def initialize_vector_db(self, force_refresh: bool = False) -> None:
+        """Initialize the vector database."""
+        logger.info("Initializing vector database")
+        self.vector_db.embed_project(force_refresh=force_refresh)
+        logger.info("Vector database initialization complete")
+    
+    def upgrade_dependency(self, dependency_name: str, target_version: Optional[str] = None) -> Dict[str, Any]:
+        """Upgrade a specific dependency."""
+        query = f"Upgrade the dependency {dependency_name}"
+        if target_version:
+            query += f" to version {target_version}"
+        
+        return self.run(query)
+    
+    def scan_and_upgrade_all(self) -> Dict[str, Any]:
+        """Scan the project and upgrade all dependencies that need updating."""
+        query = """
+        Please scan the project for dependencies that need upgrading.
+        For each dependency that needs an upgrade:
+        1. Analyze the potential impact
+        2. Create a separate branch for each upgrade
+        3. Implement necessary code changes
+        4. Generate and run tests
+        5. Create a pull request for each successful upgrade
+        
+        Start by scanning the dependencies, then proceed with the upgrades one by one.
+        """
+        
+        return self.run(query)
+```
+
+## 12. Main Application
+
+### `main.py`
+
+```python
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from config.logging_config import setup_logging
+from agents.upgrade_agent import UpgradeAgent
+from utils.message_formatter import MessageFormatter, Role
+
+logger = logging.getLogger(__name__)
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Automated Dependency Upgrade Agent")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    
+    # Initialize vector database command
+    init_parser = subparsers.add_parser("init", help="Initialize vector database")
+    init_parser.add_argument("--force", action="store_true", help="Force refresh of vector database")
+    
+    # Upgrade specific dependency command
+    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade a specific dependency")
+    upgrade_parser.add_argument("dependency", help="Name of the dependency to upgrade")
+    upgrade_parser.add_argument("--version", help="Target version to upgrade to")
+    
+    # Scan and upgrade all dependencies command
+    scan_parser = subparsers.add_parser("scan", help="Scan and upgrade all dependencies")
+    
+    # Interactive mode command
+    interactive_parser = subparsers.add_parser("interactive", help="Run in interactive mode")
+    
+    return parser.parse_args()
+
+def run_interactive_mode(agent):
+    """Run the agent in interactive mode."""
+    print(MessageFormatter.format_message(Role.SYSTEM, "Starting interactive mode. Type 'exit' to quit."))
+    
+    while True:
+        # Get user input
+        user_input = input("> ")
+        
+        if user_input.lower() == "exit":
+            print(MessageFormatter.format_message(Role.SYSTEM, "Exiting interactive mode."))
+            break
+        
+        # Run the agent
+        try:
+            agent.run(user_input)
+        except Exception as e:
+            error_message = f"Error: {str(e)}"
+            print(MessageFormatter.format_message(Role.SYSTEM, error_message))
+            logger.error(error_message)
+
+def main():
+    """Main entry point."""
+    # Set up logging
+    setup_logging()
+    
+    # Parse arguments
+    args = parse_args()
+    
+    # Create agent
+    agent = UpgradeAgent()
+    
+    # Handle commands
+    if args.command == "init":
+        print(MessageFormatter.format_message(Role.SYSTEM, "Initializing vector database..."))
+        agent.initialize_vector_db(force_refresh=args.force)
+        print(MessageFormatter.format_message(Role.SYSTEM, "Vector database initialized successfully."))
+    
+    elif args.command == "upgrade":
+        print(MessageFormatter.format_message(Role.SYSTEM, f"Upgrading dependency: {args.dependency}"))
+        agent.upgrade_dependency(args.dependency, args.version)
+    
+    elif args.command == "scan":
+        print(MessageFormatter.format_message(Role.SYSTEM, "Scanning and upgrading all dependencies..."))
+        agent.scan_and_upgrade_all()
+    
+    elif args.command == "interactive":
+        run_interactive_mode(agent)
+    
+    else:
+        print(MessageFormatter.format_message(Role.SYSTEM, "No command specified. Use --help for available commands."))
+
+if __name__ == "__main__":
+    main()
+```
+
+## Usage Instructions
+
+### 1. Environment Setup
+
+1. Clone the repository and navigate to the project directory:
+
+```bash
+git clone https://github.com/yourusername/automated-upgrades.git
+cd automated-upgrades
+```
+
+2. Create a virtual environment and install dependencies:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Set up your environment variables in the `.env` file:
+
+```
+# LLM API Configuration
+LLM_PROVIDER=anthropic  # or openai
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+
+# Vector DB Configuration
+VECTOR_DB_TYPE=chroma
+VECTOR_DB_PATH=./vector_db
+
+# GitHub Configuration
+GITHUB_TOKEN=your_github_token
+GITHUB_USERNAME=your_github_username
+GITHUB_EMAIL=your_github_email
+
+# Project Configuration
+PROJECT_PATH=./target_repo  # Path to the repository you want to upgrade
+```
+
+### 2. Using the Tool
+
+1. Initialize the vector database with your project code:
+
+```bash
+python main.py init
+```
+
+2. Scan the project for dependencies that need upgrading:
+
+```bash
+python main.py scan
+```
+
+3. Upgrade a specific dependency:
+
+```bash
+python main.py upgrade package_name --version 2.0.0
+```
+
+4. Use interactive mode for more complex operations:
+
+```bash
+python main.py interactive
+```
+
+## Workflow Example
+
+Here's a typical workflow for upgrading dependencies:
+
+1. Initialize the vector database:
+   ```bash
+   python main.py init
+   ```
+
+2. Scan for upgradable dependencies:
+   ```bash
+   python main.py scan
+   ```
+
+3. The agent will:
+   - Identify upgrade candidates
+   - Create a new branch for each upgrade
+   - Implement necessary code changes
+   - Generate and run tests
+   - Create a pull request if tests pass
+
+4. For failed upgrades, use interactive mode to debug and fix issues:
+   ```bash
+   python main.py interactive
+   ```
+   Then type:
+   ```
+   Fix the failed upgrade for package_name by addressing the test failures
+   ```
+
+## Conclusion
+
+This AI-powered Automated Dependency Upgrade system provides a comprehensive solution for managing dependency upgrades in software projects. By leveraging LangChain agents, vector databases for code context, and LLM integration, it automates the entire upgrade lifecycle from identification to pull request creation.
+
+The modular architecture allows for easy extension to support additional programming languages, test frameworks, and project types. The system's ability to learn from past upgrades will continually improve its accuracy and effectiveness over time.
