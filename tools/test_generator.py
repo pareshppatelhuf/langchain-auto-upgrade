@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from config.settings import PROJECT_PATH, LLM_PROVIDER
+from config.settings import REPO_LOCAL_PATH, LLM_PROVIDER
 from tools.vector_db import CodeVectorDB
 from langchain_community.chat_models import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -24,13 +24,13 @@ class TestGeneratorTool(BaseTool):
     name = "test_generator"
     description = "Generates test cases for code files"
     args_schema = TestGeneratorInput
-    project_path: Path = PROJECT_PATH
+    project_path: Path = REPO_LOCAL_PATH
     vector_db: CodeVectorDB = None
     llm: Any = None
     
     def __init__(self):
         super().__init__()
-        self.project_path = PROJECT_PATH
+        self.project_path = REPO_LOCAL_PATH
         self.vector_db = CodeVectorDB()
           # Initialize LLM based on configuration
         if LLM_PROVIDER.lower() == "anthropic":

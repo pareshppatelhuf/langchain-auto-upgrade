@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from config.settings import PROJECT_PATH
+from config.settings import REPO_LOCAL_PATH
 from tools.vector_db import CodeVectorDB
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class CodeAnalysisTool(BaseTool):
     
     def __init__(self):
         super().__init__()
-        self.project_path = PROJECT_PATH
+        self.project_path = REPO_LOCAL_PATH
         self.vector_db = CodeVectorDB()
     
     def _run(self, operation: str, file_path: Optional[str] = None, 

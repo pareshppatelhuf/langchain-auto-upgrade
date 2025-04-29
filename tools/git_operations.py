@@ -7,7 +7,7 @@ import git
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from config.settings import PROJECT_PATH, GITHUB_TOKEN, GITHUB_USERNAME, GITHUB_EMAIL
+from config.settings import REPO_LOCAL_PATH, GITHUB_TOKEN, GITHUB_USERNAME, GITHUB_EMAIL
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class GitOperationsTool(BaseTool):
     
     def __init__(self):
         super().__init__()
-        self.repo_path = PROJECT_PATH
+        self.repo_path = REPO_LOCAL_PATH
         try:
             self.repo = git.Repo(self.repo_path)
             # Configure git user

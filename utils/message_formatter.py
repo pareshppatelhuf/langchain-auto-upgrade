@@ -1,6 +1,9 @@
 from typing import Dict, Any, List
 from enum import Enum
 import re
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 class Role(str, Enum):
     SYSTEM = "system"
@@ -9,6 +12,8 @@ class Role(str, Enum):
     FUNCTION = "function"
 
 class MessageFormatter:
+    console = Console(highlight=False)
+    
     @staticmethod
     def format_message(role: Role, content: str) -> str:
         """Format a message with a colored box based on the role."""
@@ -30,38 +35,20 @@ class MessageFormatter:
             
         header = f"{emoji} {role.upper()}"
         
-        # Format the box with color
-        box = f"""
-┌───────────────────────────── {header} ─────────────────────────────┐
-│                                                                    │
-{MessageFormatter._wrap_content(content)}
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-"""
-        return box
-    
-    @staticmethod
-    def _wrap_content(content: str, max_width: int = 68) -> str:
-        """Wrap content to fit within the box."""
-        lines = content.split('\n')
-        wrapped_lines = []
+        # Create a rich panel with proper styling
+        panel = Panel(
+            content,
+            title=header,
+            border_style=color,
+            expand=False,
+            padding=(1, 2)
+        )
         
-        for line in lines:
-            if len(line) <= max_width:
-                wrapped_lines.append(f"│ {line.ljust(max_width)} │")
-            else:
-                # Split long lines
-                current_line = ""
-                for word in line.split():
-                    if len(current_line) + len(word) + 1 <= max_width:
-                        current_line += " " + word if current_line else word
-                    else:
-                        wrapped_lines.append(f"│ {current_line.ljust(max_width)} │")
-                        current_line = word
-                if current_line:
-                    wrapped_lines.append(f"│ {current_line.ljust(max_width)} │")
+        # Convert to string representation
+        with MessageFormatter.console.capture() as capture:
+            MessageFormatter.console.print(panel)
         
-        return "\n".join(wrapped_lines)
+        return capture.get()
     
     @staticmethod
     def format_code_block(code: str, language: str = "") -> str:

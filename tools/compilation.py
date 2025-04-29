@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from config.settings import PROJECT_PATH
+from config.settings import REPO_LOCAL_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,12 @@ class CompilationTool(BaseTool):
     name = "compilation"
     description = "Compiles the project and runs tests"
     args_schema = CompilationInput
-    project_path = PROJECT_PATH
+    project_path = REPO_LOCAL_PATH
     
     
     def __init__(self):
         super().__init__()
-        self.project_path = PROJECT_PATH
+        self.project_path = REPO_LOCAL_PATH
     
     def _run(self, operation: str, test_files: Optional[List[str]] = None,
              test_command: Optional[str] = None, build_command: Optional[str] = None) -> Dict[str, Any]:

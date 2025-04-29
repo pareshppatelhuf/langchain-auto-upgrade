@@ -6,23 +6,26 @@ from pathlib import Path
 load_dotenv()
 
 # LLM Configuration
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-7-sonnet-20250219")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4-turbo")
+LLM_PROVIDER="openai" # anthropic or openai
+ANTHROPIC_API_KEY="<<>>"
+OPENAI_API_KEY="<<>>"
+ANTHROPIC_MODEL="claude-3-7-sonnet-20250219"
+OPENAI_MODEL="gpt-4-turbo"
+
+# LLM API Configuration
+
 
 # Vector DB Configuration
-VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")
-VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./vector_db")
+VECTOR_DB_TYPE="chroma"  # or pinecone, qdrant, etc.
+VECTOR_DB_PATH="./vector_db"
 
 # GitHub Configuration
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_USERNAME = os.getenv("GITHUB_USERNAME")
-GITHUB_EMAIL = os.getenv("GITHUB_EMAIL")
+GITHUB_TOKEN="<<>>"
+GITHUB_USERNAME="<<>>"
+GITHUB_EMAIL="<<>>"
 
-# Project Configuration
-PROJECT_PATH = Path("../keycloak-otp-password-authenticator").absolute()
+# Get the project root directory
+REPO_LOCAL_PATH = Path("<<>>").absolute()
 
 # Ensure all required paths exist
 Path(VECTOR_DB_PATH).mkdir(parents=True, exist_ok=True)

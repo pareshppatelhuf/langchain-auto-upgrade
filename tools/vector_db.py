@@ -10,7 +10,7 @@ from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 
-from config.settings import VECTOR_DB_PATH, OPENAI_API_KEY, PROJECT_PATH
+from config.settings import VECTOR_DB_PATH, OPENAI_API_KEY, REPO_LOCAL_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class CodeVectorDB:
                         
                         # Add file path as metadata
                         for doc in file_docs:
-                            doc.metadata["source"] = str(file_path.relative_to(PROJECT_PATH))
+                            doc.metadata["source"] = str(file_path.relative_to(REPO_LOCAL_PATH))
                             doc.metadata["file_type"] = file_path.suffix
                         
                         documents.extend(file_docs)
@@ -67,7 +67,7 @@ class CodeVectorDB:
         
         return documents
     
-    def embed_project(self, project_path: Path = PROJECT_PATH, force_refresh: bool = False):
+    def embed_project(self, project_path: Path = REPO_LOCAL_PATH, force_refresh: bool = False):
         """Embed project code files into vector database."""
         if os.path.exists(self.vector_db_path) and not force_refresh:
             logger.info(f"Vector database already exists at {self.vector_db_path}. Loading...")
@@ -126,7 +126,7 @@ class CodeVectorDB:
     
     def get_file_content(self, file_path: str) -> str:
         """Get the content of a specific file."""
-        full_path = PROJECT_PATH / file_path
+        full_path = REPO_LOCAL_PATH / file_path
         if not full_path.exists():
             return f"File not found: {file_path}"
         

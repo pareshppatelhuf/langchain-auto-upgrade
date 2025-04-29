@@ -35,11 +35,11 @@ class UpgradeAgent:
     def _setup_tools(self) -> List[Any]:
         """Set up the tools for the agent."""
         return [
-            DependencyScanner(),
-            CodeAnalysisTool(),
-            GitOperationsTool(),
-            CompilationTool(),
-            TestGeneratorTool()
+            DependencyScanner()#,
+            # CodeAnalysisTool(),
+            # GitOperationsTool(),
+            # CompilationTool(),
+            # TestGeneratorTool()
         ]
     def _setup_llm(self) -> Any:
         """Set up the language model based on configuration."""
@@ -47,14 +47,14 @@ class UpgradeAgent:
             return ChatAnthropic(
                 model=ANTHROPIC_MODEL,
                 anthropic_api_key=ANTHROPIC_API_KEY,
-                temperature=0.2
+                temperature=0.5
             )
         else:
             # Remove proxies parameter as it's no longer supported in newer versions
             return ChatOpenAI(
                 model=OPENAI_MODEL,
                 openai_api_key=OPENAI_API_KEY,
-                temperature=0.2
+                temperature=0.5
             )
     
     def _setup_agent(self) -> AgentExecutor:
@@ -101,7 +101,7 @@ class UpgradeAgent:
             tools=self.tools,
             memory=self.memory,
             verbose=True,
-            handle_parsing_errors=True
+            handle_parsing_errors=False
         )
     
     def run(self, query: str) -> Dict[str, Any]:
@@ -114,6 +114,10 @@ class UpgradeAgent:
         
         # Run the agent
         #result = self.agent_executor(query)
+        # print("*"*80)
+        # print(type(self.agent_executor))
+        # print(type(self.agent_executor.invoke))
+        # print("*"*80)
         result = self.agent_executor.invoke({"input": query})
         
         # Format the response message
@@ -155,6 +159,7 @@ class UpgradeAgent:
     def scan_and_find_upgrade_candidate(self) -> Dict[str, Any]:
         """Scan the project and find upgrade candidates."""
         query = "Scan the project for dependencies and find upgrade candidates."
+        query = "find upgrade candidates"
         logger.info("Scanning for upgrade candidates...")
         return self.run(query)
 

@@ -9,21 +9,22 @@ from typing import Dict, List, Any, Optional, Tuple
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from config.settings import PROJECT_PATH
+from config.settings import REPO_LOCAL_PATH
 
 logger = logging.getLogger(__name__)
 
 class DependencyScannerInput(BaseModel):
-    project_path: str = Field(default=str(PROJECT_PATH), description="Path to the project directory")
+    project_path: Path = Field(default=str(REPO_LOCAL_PATH), description="Path to the project directory")
 
 class DependencyScanner(BaseTool):
     name: str = "dependency_scanner"
     description: str = "Scans a project for dependencies and identifies upgrade candidates"
     args_schema = DependencyScannerInput
     
-    def _run(self, project_path: str = str(PROJECT_PATH)) -> Dict[str, Any]:
+    def _run(self, project_path: Path = Path(REPO_LOCAL_PATH)) -> Dict[str, Any]:
         """Run the dependency scanner."""
-        project_path = Path(project_path)
+       
+        project_path = Path(REPO_LOCAL_PATH) # Path(project_path)
         if not project_path.exists():
             return {"error": f"Project path {project_path} does not exist"}
         

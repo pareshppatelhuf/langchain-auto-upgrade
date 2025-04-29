@@ -1,9 +1,14 @@
+import os
+
+os.environ["PYTHONPATH"] = "C:\\projects\\solumina\\test\\langchain-auto-upgrade"
 from langchain.agents import create_openai_functions_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tools.dependency_scanner import DependencyScanner
 from tools.code_analysis import CodeAnalysisTool
+
+print(os.environ["PYTHONPATH"])
 # Define tools properly with decorators
 @tool
 def search_database(query: str) -> str:
